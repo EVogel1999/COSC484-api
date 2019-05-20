@@ -472,6 +472,15 @@ function startServer(datastore: Datastore) {
       res.status(500).send(e);
     }
   });
+
+  app.get('/photos', async (req: Request, res: Response) => {
+    try {
+        const photos = await datastore.getAllPhotos();
+        res.status(200).send(photos);
+    } catch (e) {
+        res.status(500).send(e);
+    }
+  });
   
   app.listen(port, () => {
     console.log(`Server is running on port ${port}`);

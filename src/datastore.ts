@@ -215,6 +215,10 @@ export class Datastore {
     return await this.school.collection('athletes').find({}).toArray();
   }
 
+  async getAllPhotos() {
+    return await this.school.collection('gallery').find({}).toArray();
+  }
+
   // Add athlete to the database
   async addAthletes(params:
     { name: string,

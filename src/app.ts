@@ -3,9 +3,12 @@ import { Datastore } from "./datastore";
 import * as express from 'express';
 import * as morgan from 'morgan';
 import { Request, Response } from 'express';
+import * as fs from 'fs';
+import * as jwt from 'jsonwebtoken';
 import { request } from "https";
 
 const bodyParser = require('body-parser');
+
 
 Datastore
   .connect()
@@ -29,7 +32,7 @@ function startServer(datastore: Datastore) {
     // Request methods you wish to allow
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
     // Request headers you wish to allow
-    res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,content-type');
+    res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,content-type,authorization');
     // Set to true if you need the website to include cookies in the requests sent
     // to the API (e.g. in case you use sessions)
     res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -40,6 +43,8 @@ function startServer(datastore: Datastore) {
   const port = process.env.PORT || 3000;
     
   // Routes go here
+
+  // Retrieves a list of all faculty
   app.get('/faculty', async (req: Request, res: Response) => {
     try {
         // Get filter query, if any
@@ -58,6 +63,7 @@ function startServer(datastore: Datastore) {
     }
   });
 
+  // Retrieves a particular faculty member by their id
   app.get('/faculty/:id', async (req: Request, res: Response) => {
     const id: string = req.params.id;
     try {
@@ -72,16 +78,19 @@ function startServer(datastore: Datastore) {
     }
   });
 
+  // Dynamically gets the list of departments
   app.get('/departments', async (req: Request, res: Response) => {
     try {
-        const departments = await datastore.getDepartments();
-        res.status(200).send(departments);
+      const departments = await datastore.getDepartments();
+      res.status(200).send(departments);
     } catch (e) {
-        res.status(500).send(e);
+      res.status(500).send(e);
     }
   });
 
+  // Creates a new faculty member
   app.post('/faculty', async (req: Request, res: Response) => {
+    const auth = req.header('authorization');
     const name = req.body.name;
     const role = req.body.role;
     const email = req.body.email;
@@ -89,35 +98,46 @@ function startServer(datastore: Datastore) {
     const department = req.body.department;
     const picture = req.body.picture;
     const website = req.body.website;
-    if (name == undefined || role == undefined || email == undefined || classes == undefined ||
-      department == undefined || picture == undefined) {
-        res.status(400).send('Missing parameter(s) for faculty');
+    if (!auth) {
+      res.status(401).send('You must be logged in');
+    } else {
+        if (name == '' || role == '' || email == '' ||
+        department == '' || picture == '') {
+          res.status(400).send('Missing parameter(s) for faculty');
+      } else {
+        try {
+          await datastore.hireFaculty({name: name, role: role, email: email, classes: classes,
+            department: department, picture: picture, website: website});
+            res.sendStatus(201);
+        } catch (e) {
+          res.status(500).send(e);
+        }
+      }
+    }
+  });
+
+  // Deletes a faculty member by id
+  app.delete('/faculty/:id', async (req: Request, res: Response) => {
+    const auth = req.header('authorization');
+    if (!auth) {
+      res.status(401).send('You must be logged in');
     } else {
       try {
-        await datastore.hireFaculty({name: name, role: role, email: email, classes: classes,
-          department: department, picture: picture, website: website});
-          res.sendStatus(201);
+        const id = req.params.id;
+        const find = await datastore.getFaculty(id);
+        if (find == undefined) {
+          res.status(404).send('Could not find faculty');
+        } else {
+          datastore.fireFaculty(id);
+          res.sendStatus(204);
+        }
       } catch (e) {
         res.status(500).send(e);
       }
     }
   });
 
-  app.delete('/faculty/:id', async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id;
-      const find = await datastore.getFaculty(id);
-      if (find == undefined) {
-        res.status(404).send('Could not find faculty');
-      } else {
-        datastore.fireFaculty(id);
-        res.sendStatus(204);
-      }
-    } catch (e) {
-      res.status(500).send(e);
-    }
-  });
-
+  // Updates a faculty member by id
   app.patch('/faculty/:id', async (req: Request, res: Response) => {
     const id = req.params.id;
     const name = req.body.name;
@@ -127,25 +147,31 @@ function startServer(datastore: Datastore) {
     const department = req.body.department;
     const picture = req.body.picture;
     const website = req.body.website;
-    if (id == undefined || name == undefined || role == undefined || email == undefined || classes == undefined ||
-      department == undefined || picture == undefined) {
-        res.status(400).send('Missing parameter(s) for faculty');
+    const auth = req.header('authorization');
+    if (!auth) {
+      res.status(401).send('You must be logged in');
     } else {
-      try {
-        const find = await datastore.getFaculty(id);
-        if (find == undefined) {
-          res.status(404).send('Could not find faculty');
-        } else {
-          datastore.updateFaculty(id, {name: name, role: role, email: email, classes: classes,
-            department: department, picture: picture, website: website});
-          res.sendStatus(204);
+        if (id == '' || name == '' || role == '' || email == '' ||
+        department == '' || picture == '') {
+          res.status(400).send('Missing parameter(s) for faculty');
+      } else {
+        try {
+          const find = await datastore.getFaculty(id);
+          if (find == undefined) {
+            res.status(404).send('Could not find faculty');
+          } else {
+            datastore.updateFaculty(id, {name: name, role: role, email: email, classes: classes,
+              department: department, picture: picture, website: website});
+            res.sendStatus(204);
+          }
+        } catch (e) {
+          res.status(500).send(e);
         }
-      } catch (e) {
-        res.status(500).send(e);
       }
     }
   });
   
+  // Gets list of school resources
   app.get('/resources', async (req: Request, res: Response) => {
     try {
       const result = await datastore.getAllResources();
@@ -155,23 +181,81 @@ function startServer(datastore: Datastore) {
     }
   });
 
+  // Creates a new resource
   app.post('/resource', async (req: Request, res: Response) => {
     const id = req.params.id;
     const name = req.body.name;
     const description = req.body.description;
     const website = req.body.website;
-    if (name == undefined || description == undefined || website == undefined) {
-        res.status(400).send('Missing parameter(s) for resources');
+    const auth = req.header('authorization');
+    if (!auth) {
+      res.status(401).send('You must be logged in');
+    } else {
+        if (name == '' || description == '' || website == '') {
+          res.status(400).send('Missing parameter(s) for resources');
+      } else {
+        try {
+          await datastore.postResource(id, {name: name, description: description, website: website});
+          res.sendStatus(201);
+        } catch (e) {
+          res.status(500).send(e);
+        }
+      }
+    }
+  });
+
+  // Gets a school resource by id
+  app.get('/resources/:id', async (req: Request, res: Response) => {
+    const id: string = req.params.id;
+    try {  
+      const result = await datastore.getResource(id);
+      if (result !== null) {
+        res.status(200).send(result);
+      } else {
+        res.status(404).send('Could not find Resource');
+      }
+    } catch (e) {
+      res.status(500).send(e);
+    }
+  });
+
+  // Deletes a school resource by id
+  app.delete('/resources/:id', async (req: Request, res: Response) => {
+    const auth = req.header('authorization');
+    if (!auth) {
+      res.status(401).send('You must be logged in');
     } else {
       try {
-        await datastore.postResource(id, {name: name, description: description, website: website});
-          res.sendStatus(201);
+        const id = req.params.id;
+        const find = await datastore.getResource(id);
+        if (find === undefined) {
+          res.status(404).send('Could not find resource');
+        } else {
+          datastore.removeResource(id);
+          res.sendStatus(204);
+        }
       } catch (e) {
         res.status(500).send(e);
       }
     }
   });
 
+  // Gets a school news article by id
+  app.get('/news/:id', async (req: Request, res: Response) => {
+    const id: string = req.params.id;
+    try {
+      const result = await datastore.getNews(id);
+      if (result !== null) {
+        res.status(200).send(result);
+      } else {
+        res.status(404).send('Could not find news article');
+      }
+    } catch (e) {
+      res.status(500).send(e);
+    }
+  });
+
+  // Gets list of school news
   app.get('/news', async (req: Request, res: Response) => {
     try {
       const result = await datastore.getAllNews();
@@ -185,7 +269,7 @@ function startServer(datastore: Datastore) {
     }
   });
  
-
+  // Creates new school news article
   app.post('/news', async (req: Request, res: Response) => {
     const id = req.params.id;
     const title = req.body.title;
@@ -193,56 +277,73 @@ function startServer(datastore: Datastore) {
     const description = req.body.description;
     const image = req.body.image;
     const body = req.body.body;
-    if (title == undefined || description == undefined || image == undefined || date == undefined || body == undefined) {
+    const auth = req.header('authorization');
+    if (!auth) {
+      res.status(401).send('You must be logged in');
+    } else {
+      if (title == '' || description == '' || image == '' || date == '' || body == '') {
         res.status(400).send('Missing parameter(s) for article');
-    } else { 
-      try {
-        await datastore.postNews(id, {title: title,date:date, description: description, image: image,body:body});
+      } else { 
+        try {
+          await datastore.postNews(id, {title: title,date:date, description: description, image: image,body:body});
           res.sendStatus(201);
+        } catch (e) {
+          res.status(500).send(e);
+        }
+      }
+    }
+  });
+
+  // Updates a school news article
+  app.patch('/news/:id', async (req: Request, res: Response) => {
+    const auth = req.header('authorization');
+    if (!auth) {
+      res.status(401).send('You must be logged in');
+    } else {
+      try {
+        const id = req.params.id;
+        const find = await datastore.getNews(id);
+        if (find === undefined) {
+          res.status(404).send('Could not find Articles');
+        } else {
+          const params = {
+            title: req.body.title,
+            date: req.body.date,
+            description: req.body.description,
+            image: req.body.image,
+            body: req.body.body
+          };
+          if (params.title == '' || params.date == '' || params.image == '' || params.description == '' || params.body == '') {
+            res.status(400).send('Missing parameter(s) for article');
+          } else {
+            await datastore.patchNews(id, params);
+            res.sendStatus(204);
+          }
+        }
       } catch (e) {
         res.status(500).send(e);
       }
     }
   });
 
-  app.patch('/news/:id', async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id;
-      const find = await datastore.getNews(id);
-      if (find === undefined) {
-        res.status(404).send('Could not find Articles');
-      } else {
-        const params = {
-          title: req.body.title,
-          date: req.body.date,
-          description: req.body.description,
-          image: req.body.image,
-          body: req.body.body
-        };
-        if (params.title == undefined || params.date == undefined || params.image == undefined || params.description == undefined || params.body == undefined) {
-          res.status(400).send('Missing parameter(s) for article');
+  // Deletes a school news article
+  app.delete('/news/:id', async (req: Request, res: Response) => {
+    const auth = req.header('authorization');
+    if (!auth) {
+      res.status(401).send('You must be logged in');
+    } else {
+      try {
+        const id = req.params.id;
+        const find = await datastore.getNews(id);
+        if (find === undefined) {
+          res.status(404).send('Could not find Articles');
         } else {
-          await datastore.patchNews(id, params);
+          await datastore.deleteNews(id);
           res.sendStatus(204);
         }
+      } catch (e) {
+        res.status(500).send(e);
       }
-    } catch (e) {
-      res.status(500).send(e);
-    }
-  });
-
-  app.delete('/news/:id', async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id;
-      const find = await datastore.getNews(id);
-      if (find === undefined) {
-        res.status(404).send('Could not find Articles');
-      } else {
-        await datastore.deleteNews(id);
-        res.sendStatus(204);
-      }
-    } catch (e) {
-      res.status(500).send(e);
     }
   });
 
@@ -278,49 +379,8 @@ function startServer(datastore: Datastore) {
       } catch (e) {
         res.status(500).send(e);
       }
-    });
+  });
 
-  app.delete('/resources/:id', async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id;
-      const find = await datastore.getResource(id);
-      if (find === undefined) {
-        res.status(404).send('Could not find resource');
-      } else {
-        datastore.removeResource(id);
-        res.sendStatus(204);
-      }
-    } catch (e) {
-      res.status(500).send(e);
-    }
-  });
-  app.get('/news/:id', async (req: Request, res: Response) => {
-    const id: string = req.params.id;
-    try {
-      const result = await datastore.getNews(id);
-      if (result !== null) {
-        res.status(200).send(result);
-      } else {
-        res.status(404).send('Could not find news article');
-      }
-    } catch (e) {
-      res.status(500).send(e);
-    }
-  });
-  
-  app.get('/resources/:id', async (req: Request, res: Response) => {
-    const id: string = req.params.id;
-    try {  
-      const result = await datastore.getResource(id);
-      if (result !== null) {
-        res.status(200).send(result);
-      } else {
-        res.status(404).send('Could not find Resource');
-      }
-    } catch (e) {
-      res.status(500).send(e);
-    }
-  });
   //Retrieves all sport categories
   app.get('/sports', async (req: Request, res: Response) => {
     try {
@@ -338,37 +398,47 @@ function startServer(datastore: Datastore) {
     const description = req.body.description;
     const picture = req.body.picture;
     const website = req.body.website;
-
-    if (name == undefined || sport == undefined || description == undefined || picture == undefined)
-     {
-        res.status(400).send('Missing parameter(s) for athletes');
+    const auth = req.header('authorization');
+    if (!auth) {
+      res.status(401).send('You must be signed in');
     } else {
-      try {
-        await datastore.addAthletes({name: name, sport: sport, description: description,
-           picture: picture, website: website});
+      if (name == '' || sport == '' || description == '' || picture == '')
+      {
+         res.status(400).send('Missing parameter(s) for athletes');
+      } else {
+        try {
+          await datastore.addAthletes({name: name, sport: sport, description: description,
+            picture: picture, website: website});
           res.sendStatus(201);
-      } catch (e) {
-        res.status(500).send(e);
+        } catch (e) {
+          res.status(500).send(e);
+       }
       }
     }
   });
  
   //Deletes a single athlete via ID
   app.delete('/athletes/:id', async (req: Request, res: Response) => {
-    try {
-      const id = req.params.id;
-      const find = await datastore.getAthletes(id);
-      if (find == undefined) {
-        res.status(404).send('Could not find athletes for deletion');
-      } else {
-        datastore.removeAthletes(id);
-        res.sendStatus(204);
+    const auth = req.header('authorization');
+    if (!auth) {
+      res.status(401).send('You must be logged in');
+    } else {
+      try {
+        const id = req.params.id;
+        const find = await datastore.getAthletes(id);
+        if (find == undefined) {
+          res.status(404).send('Could not find athletes for deletion');
+        } else {
+          datastore.removeAthletes(id);
+          res.sendStatus(204);
+        }
+      } catch (e) {
+        res.status(500).send(e);
       }
-    } catch (e) {
-      res.status(500).send(e);
     }
   });
 
+  // Gets a list of events happening at the school
   app.get('/events', async (req: Request, res: Response) => {
     try {
       const result = await datastore.getSomeEvents();
@@ -383,23 +453,27 @@ function startServer(datastore: Datastore) {
       res.status(500).send(e);
     }
   });
-  
-  app.get('/resources/:id', async (req: Request, res: Response) => {
-    const id: string = req.params.id;
-    try {  
-      const result = await datastore.getResource(id);
-      if (result !== null) {
-        res.status(200).send(result);
+
+  app.post('/login', async (req: Request, res: Response) => {
+    let userData = req.body;
+    try {
+      const user = await datastore.getUserByUsername(userData.username);
+      if( user == undefined) {
+        res.status(404).send('Username not found');
+      } else if (user.password !== userData.password) {
+        res.status(401).send('Invalid password');
       } else {
-        res.status(404).send('Could not find Resource');
+        const payload = {subject: user._id};
+        const token = jwt.sign(payload, 'secretKey');
+        user.token = token;
+        res.status(200).send(user);
       }
-    } catch (e) {
+    } catch(e) {
       res.status(500).send(e);
     }
   });
-
+  
   app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
   });
-
 }
